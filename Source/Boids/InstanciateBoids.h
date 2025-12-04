@@ -26,10 +26,23 @@ protected:
 	TArray<FTransform> transforms;
 
 public:
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	int numBoids = 1000;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	int speed = 50;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	int maxDistance = 100;
+	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
 
 private:
 	FVector alignment;
+	TArray<FVector> separation;
+	FVector cohesion;
 	void AlignBoids();
+	void SeparateBoids();
+	void CohesionBoids();
+
+	void SetBoidRotation(FTransform& transform) const;
 };
