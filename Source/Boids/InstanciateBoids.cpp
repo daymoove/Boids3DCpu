@@ -19,18 +19,13 @@ AInstanciateBoids::AInstanciateBoids()
 	mesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 }
 
-// void AInstanciateBoids::OnConstruction(const FTransform& Transform)
-// {
-// 	Super::OnConstruction(Transform);
-//
-// 	
-// }
-
 
 // Called when the game starts or when spawned
 void AInstanciateBoids::BeginPlay()
 {
 	Super::BeginPlay();
+	finalDirections.SetNumZeroed(numBoids);
+	
 	if (mesh->GetInstanceCount() == 0)
 	{
 		transforms.Empty(numBoids);
@@ -47,60 +42,76 @@ void AInstanciateBoids::BeginPlay()
 void AInstanciateBoids::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	AlignBoids();
+	if (numBoids == 0) return;
+
+	CalculateGlobalData();
+	
+	ParallelFor(numBoids, [&](int i)
+	{
+		FVector separationForce = SeparateBoids(i);
+		FVector cohesionForce = (centroid - transforms[i].GetLocation()).GetSafeNormal();
+		FVector desiredDir = (alignment * 1.0f) + (separationForce * 2.0f) + (cohesionForce * 1.0f);
+		finalDirections[i] = desiredDir.GetSafeNormal();
+	});
 	for (int i = 0; i < numBoids; ++i)
 	{
-		transforms[i].SetLocation(transforms[i].GetLocation() += transforms[i].GetRotation().GetUpVector() * speed * DeltaTime);
-		mesh->UpdateInstanceTransform(i, transforms[i], false, true);
+		FVector currentUp = transforms[i].GetRotation().GetUpVector();
+		FVector targetDirection = finalDirections[i];
+
+		if (targetDirection.IsNearlyZero()) continue;
+
+		FVector SmoothedDir = FMath::VInterpNormalRotationTo(currentUp, targetDirection, DeltaTime, 5.0f);
+		FQuat Delta = FQuat::FindBetween(currentUp, SmoothedDir);
+		transforms[i].SetRotation(Delta * transforms[i].GetRotation());
+		FVector newLoc = transforms[i].GetLocation() + (transforms[i].GetRotation().GetUpVector() * speed * DeltaTime);
+		transforms[i].SetLocation(newLoc);
 	}
+	mesh->BatchUpdateInstancesTransforms(0, transforms, false, true);
 }
 
-void AInstanciateBoids::AlignBoids()
+FVector AInstanciateBoids::SeparateBoids(int index)
 {
-	FVector sum = FVector::ZeroVector;
-	for (FTransform t : transforms)
+	FVector actualPosition = transforms[index].GetLocation();
+	FVector separationForce = FVector::ZeroVector;
+	for (int i = 0; i < numBoids; ++i)
 	{
-		sum += t.GetRotation().GetUpVector();
-	}
-	alignment = sum.GetSafeNormal();
-}
+		if (i == index) continue;
 
-void AInstanciateBoids::SeparateBoids()
-{
-	for (FTransform transform : transforms)
-	{
-		for (FTransform otherTransform: transforms)
+		FVector diffBetweenAandB = actualPosition - transforms[i].GetLocation();
+		float distSq = diffBetweenAandB.SizeSquared();
+		if (distSq < maxDistance*maxDistance && distSq > 0.01f) 
 		{
-			FVector vectorBetweenAandB = transform.GetLocation() - otherTransform.GetLocation();
-			float ratio = 1 - (UE::Geometry::Length(vectorBetweenAandB)/maxDistance);
-			FVector otherDirection = vectorBetweenAandB.GetSafeNormal();
-			separation.Add((transform.GetRotation().GetUpVector()+otherDirection * ratio).GetSafeNormal());
+			float dist = FMath::Sqrt(distSq);
+			float ratio = 1 - (dist/maxDistance);
+			separationForce += (diffBetweenAandB / dist) * ratio;
 		}
 	}
+	return separationForce;
 }
 
-void AInstanciateBoids::CohesionBoids()
+void AInstanciateBoids::CalculateGlobalData()
 {
-	FVector centroid = FVector::ZeroVector;
-	for (FTransform transform : transforms)
-	{
-		centroid += transform.GetLocation();
-	}
-	centroid /= numBoids;
+	FVector alignSum = FVector::ZeroVector;
+	FVector centerSum = FVector::ZeroVector;
 
-	for (FTransform& t : transforms)
+	for (const FTransform& t : transforms)
 	{
-		FVector DirectionToCenter = (centroid - t.GetLocation());
-		cohesion = DirectionToCenter.GetSafeNormal();
+		alignSum += t.GetRotation().GetUpVector();
+		centerSum += t.GetLocation();
 	}
 
+	alignment = alignSum.GetSafeNormal();
+	if (numBoids > 0)
+	{
+		centroid = centerSum / numBoids;
+	}
 }
 
-void AInstanciateBoids::SetBoidRotation(FTransform& transform ) const
+void AInstanciateBoids::SetBoidRotation(FTransform& transform, FVector direction) const
 {
 	FVector CurrentUp = transform.GetRotation().GetUpVector();
-	if (CurrentUp.Equals(alignment, 0.01f)) return;
-	FQuat DeltaRotation = FQuat::FindBetween(CurrentUp, alignment);
+	if (CurrentUp.Equals(direction, 0.01f)) return;
+	FQuat DeltaRotation = FQuat::FindBetween(CurrentUp, direction);
 	transform.SetRotation(DeltaRotation * transform.GetRotation());
 }
 

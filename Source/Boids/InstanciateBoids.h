@@ -38,11 +38,12 @@ public:
 
 private:
 	FVector alignment;
-	TArray<FVector> separation;
-	FVector cohesion;
+	FVector centroid;
+	TArray<FVector> finalDirections;
 	void AlignBoids();
-	void SeparateBoids();
+	FVector SeparateBoids(int index);
+	void CalculateGlobalData();
 	void CohesionBoids();
 
-	void SetBoidRotation(FTransform& transform) const;
+	void SetBoidRotation(FTransform& transform, FVector direction) const;
 };
