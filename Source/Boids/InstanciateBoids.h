@@ -32,18 +32,36 @@ public:
 	int speed = 50;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
 	int maxDistance = 100;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	float viewAngle = 180.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	int chunkSize = 100;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	float alignWeight = 0.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	float cohesionWeight = 0.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	float separationWeight = 2.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boids Settings")
+	float avoidanceWeight = 2.0f;
 	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
 
 private:
-	FVector alignment;
-	FVector centroid;
+	TArray<FVector> alignment;
+	TArray<FVector> centroid;
+	TArray<FVector> separation;
+	TArray<FVector> alignementOfChunks;
+	TArray<FVector> centroidOfChunks;
 	TArray<FVector> finalDirections;
-	void AlignBoids();
+	TArray<TArray<int>> boidsInField;
+	
 	FVector SeparateBoids(int index);
-	void CalculateGlobalData();
-	void CohesionBoids();
+	FVector ObjectAvoidance(int index);
+	void FindBoidsInField();
+	void CalculateGlobalData(int index);;
 
 	void SetBoidRotation(FTransform& transform, FVector direction) const;
 };

@@ -25,13 +25,14 @@ void AInstanciateBoids::BeginPlay()
 {
 	Super::BeginPlay();
 	finalDirections.SetNumZeroed(numBoids);
-	
+	alignment.SetNumZeroed(numBoids);
+	centroid.SetNumZeroed(numBoids);
 	if (mesh->GetInstanceCount() == 0)
 	{
 		transforms.Empty(numBoids);
 		for (int i = 0; i < numBoids; ++i)
 		{
-			transforms.Add(FTransform(FVector(FMath::RandRange(0,2000), FMath::RandRange(0,2000), FMath::RandRange(0,2000))));
+			transforms.Add(FTransform(FVector(FMath::RandRange(-2000,2000), FMath::RandRange(-2000,2000), FMath::RandRange(0,2000))));
 			transforms[i].SetRotation(FQuat(FRotator(FMath::RandRange(-90,90),FMath::RandRange(-90,90),0)));
 		}
 		mesh->AddInstances(transforms,false);
@@ -44,13 +45,15 @@ void AInstanciateBoids::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	if (numBoids == 0) return;
 
-	CalculateGlobalData();
+	FindBoidsInField();
 	
 	ParallelFor(numBoids, [&](int i)
 	{
+		CalculateGlobalData(i);
 		FVector separationForce = SeparateBoids(i);
-		FVector cohesionForce = (centroid - transforms[i].GetLocation()).GetSafeNormal();
-		FVector desiredDir = (alignment * 1.0f) + (separationForce * 2.0f) + (cohesionForce * 1.0f);
+		FVector cohesionForce = (centroid[i] - transforms[i].GetLocation()).GetSafeNormal();
+		FVector objectAvoidance = ObjectAvoidance(i);
+		FVector desiredDir = (alignment[i] * alignWeight) + (separationForce * separationWeight) + (cohesionForce * cohesionWeight) + (objectAvoidance * avoidanceWeight);
 		finalDirections[i] = desiredDir.GetSafeNormal();
 	});
 	for (int i = 0; i < numBoids; ++i)
@@ -60,11 +63,12 @@ void AInstanciateBoids::Tick(float DeltaTime)
 
 		if (targetDirection.IsNearlyZero()) continue;
 
-		FVector SmoothedDir = FMath::VInterpNormalRotationTo(currentUp, targetDirection, DeltaTime, 5.0f);
-		FQuat Delta = FQuat::FindBetween(currentUp, SmoothedDir);
+		//FVector SmoothedDir = FMath::VInterpNormalRotationTo(currentUp, targetDirection, DeltaTime, 60.0f);
+		FQuat Delta = FQuat::FindBetween(currentUp, targetDirection);
 		transforms[i].SetRotation(Delta * transforms[i].GetRotation());
 		FVector newLoc = transforms[i].GetLocation() + (transforms[i].GetRotation().GetUpVector() * speed * DeltaTime);
-		transforms[i].SetLocation(newLoc);
+		newLoc.Normalize();
+		transforms[i].SetLocation(FMath::VInterpNormalRotationTo(transforms[i].GetLocation(), newLoc, DeltaTime, 90.0f));
 	}
 	mesh->BatchUpdateInstancesTransforms(0, transforms, false, true);
 }
@@ -73,37 +77,75 @@ FVector AInstanciateBoids::SeparateBoids(int index)
 {
 	FVector actualPosition = transforms[index].GetLocation();
 	FVector separationForce = FVector::ZeroVector;
-	for (int i = 0; i < numBoids; ++i)
+	int count = 0;
+	for (const int boidIndex : boidsInField[index])
 	{
-		if (i == index) continue;
-
-		FVector diffBetweenAandB = actualPosition - transforms[i].GetLocation();
-		float distSq = diffBetweenAandB.SizeSquared();
-		if (distSq < maxDistance*maxDistance && distSq > 0.01f) 
+		if (boidIndex == index) continue;
+		
+		const float distBetweenAandB =  FVector::Dist(actualPosition, transforms[boidIndex].GetLocation());
+		if (distBetweenAandB < chunkSize  && distBetweenAandB > 0)
 		{
-			float dist = FMath::Sqrt(distSq);
-			float ratio = 1 - (dist/maxDistance);
-			separationForce += (diffBetweenAandB / dist) * ratio;
+			FVector diffBetweenAandB = actualPosition - transforms[boidIndex].GetLocation();
+			diffBetweenAandB.Normalize();
+			float ratio = chunkSize / FMath::Max(distBetweenAandB, 1.0f);
+			separationForce += diffBetweenAandB * ratio;
+			count++;
+		}
+	}
+	if (count > 0)
+	{
+		separationForce /= static_cast<float>(count);
+		if (!separationForce.IsNearlyZero())
+		{
+			separationForce.Normalize();
 		}
 	}
 	return separationForce;
 }
 
-void AInstanciateBoids::CalculateGlobalData()
+FVector AInstanciateBoids::ObjectAvoidance(int index)
+{
+	int numPoints = 100;
+	float goldenRatio = (1 + FMath::Sqrt(5.0f)) / 2.0f;
+	for (int i = 0; i < numBoids; ++i)
+	{
+		float Theta = acos(1 - 2*(i / numPoints));
+		float Phi = 360 * goldenRatio * i;
+		FVector coords  = FVector::ZeroVector;
+		coords.X = FMath::Cos(Phi) * FMath::Sin(Theta);
+		coords.Y = FMath::Sin(Phi) * FMath::Sin(Theta);
+		coords.Z = FMath::Cos(Theta);
+		FVector rayStart = transforms[index].GetLocation();
+		FVector rayEnd = rayStart + coords * maxDistance;
+		FHitResult hitResult;
+		FCollisionQueryParams params;
+		params.AddIgnoredActor(this);
+		bool isHit = GetWorld()->LineTraceSingleByChannel(hitResult, rayStart, rayEnd, ECC_Visibility, params);
+		if (!isHit)
+		{
+			return coords.GetSafeNormal();
+		}
+	}
+	return FVector::ZeroVector;
+}
+
+void AInstanciateBoids::CalculateGlobalData(int index)
 {
 	FVector alignSum = FVector::ZeroVector;
 	FVector centerSum = FVector::ZeroVector;
+	int numBoidsInField = boidsInField[index].Num();
 
-	for (const FTransform& t : transforms)
+	for (const int boidIndex : boidsInField[index])
 	{
+		const FTransform& t = transforms[boidIndex];
 		alignSum += t.GetRotation().GetUpVector();
 		centerSum += t.GetLocation();
 	}
 
-	alignment = alignSum.GetSafeNormal();
-	if (numBoids > 0)
+	alignment[index] = alignSum.GetSafeNormal();
+	if (numBoidsInField > 0)
 	{
-		centroid = centerSum / numBoids;
+		centroid[index] = centerSum / numBoidsInField;
 	}
 }
 
@@ -113,5 +155,38 @@ void AInstanciateBoids::SetBoidRotation(FTransform& transform, FVector direction
 	if (CurrentUp.Equals(direction, 0.01f)) return;
 	FQuat DeltaRotation = FQuat::FindBetween(CurrentUp, direction);
 	transform.SetRotation(DeltaRotation * transform.GetRotation());
+}
+void AInstanciateBoids::FindBoidsInField()
+{
+	boidsInField.Empty();
+	boidsInField.SetNum(numBoids);
+	
+	const float chunkRadius = chunkSize*chunkSize;
+	const float dotPrductFOV = FMath::Cos(FMath::DegreesToRadians(viewAngle * 0.5f));
+	TArray<TArray<int>> TempBoidsList;
+	TempBoidsList.SetNum(numBoids);
+	
+	ParallelFor(numBoids, [&](const int32 i)
+	{
+		const FVector& actualPosition = transforms[i].GetLocation();
+		const FVector& actualDirection = transforms[i].GetRotation().GetUpVector();
+		
+		for (int j = 0; j < numBoids; j++)
+		{
+			if (i==j)continue;
+			if (chunkRadius > FVector::DistSquared(actualPosition, transforms[j].GetLocation()))
+			{
+				FVector directionToOther = (transforms[j].GetLocation() - actualPosition).GetSafeNormal();
+				if (FVector::DotProduct(actualDirection, directionToOther) > dotPrductFOV)
+				{
+					TempBoidsList[i].Add(j);
+				}
+			}
+		}
+	});
+	for (int i = 0; i < numBoids; i++)
+	{
+		boidsInField[i] = TempBoidsList[i];
+	}
 }
 
